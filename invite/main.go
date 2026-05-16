@@ -60,6 +60,7 @@ type recoveryReq struct {
 
 type recoveryResp struct {
 	RecoveryLink string    `json:"recovery_link"`
+	RecoveryCode string    `json:"recovery_code"`
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
@@ -153,7 +154,12 @@ func createIdentity(ctx context.Context, c *http.Client, admin string, in create
 
 func createRecoveryLink(ctx context.Context, c *http.Client, admin string, in recoveryReq) (*recoveryResp, error) {
 	var out recoveryResp
-	if err := doJSON(ctx, c, http.MethodPost, admin+"/admin/recovery/link", in, &out); err != nil {
+	// /admin/recovery/code uses the `code` strategy and works with
+	// methods.code.enabled=true (which we keep on for the recovery flow even
+	// when code-based login is disabled). The deprecated /admin/recovery/link
+	// requires methods.link.enabled=true — which we keep off because it adds
+	// a passwordless-login attack surface we don't want.
+	if err := doJSON(ctx, c, http.MethodPost, admin+"/admin/recovery/code", in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

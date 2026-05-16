@@ -154,6 +154,12 @@ selfservice:
       ui_url: https://${LOGIN_UI_HOST}/login
       lifespan: 10m
     registration:
+      # Closed by default — onboarding is invite-only. An invited user clicks
+      # the recovery link, lands on /settings with a session, and from there
+      # links whichever OIDC providers / passkeys they want. The OIDC button
+      # on /login only works for users who already linked that provider, so
+      # unknown Google/GitHub/etc. accounts can't bootstrap an identity.
+      enabled: ${KRATOS_REGISTRATION_ENABLED}
       lifespan: 10m
       ui_url: https://${LOGIN_UI_HOST}/registration
       after:
