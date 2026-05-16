@@ -82,6 +82,7 @@ jobs:
           git push origin deploy --force
 
       - name: Trigger Portainer Redeploy Webhook
+        if: ${{ secrets.PORTAINER_REDEPLOY_HOOK != '' }}
         uses: distributhor/workflow-webhook@2381f0e9c7b6bf061fb1405bd0804b8706116369 # v3.0.8
         with:
           webhook_url: ${{ secrets.PORTAINER_REDEPLOY_HOOK }}
