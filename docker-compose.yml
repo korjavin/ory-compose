@@ -49,9 +49,6 @@ services:
       GITLAB_CLIENT_ID: ${GITLAB_CLIENT_ID:-}
       GITLAB_CLIENT_SECRET: ${GITLAB_CLIENT_SECRET:-}
       GITLAB_ISSUER_URL: ${GITLAB_ISSUER_URL:-https://gitlab.com}
-      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
-      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
-      MICROSOFT_TENANT: ${MICROSOFT_TENANT:-common}
     volumes:
       - kratos-rendered:/out
     networks:

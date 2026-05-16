@@ -2,7 +2,7 @@
 
 A git-ops Docker Compose deployment that gives you:
 
-- **Ory Kratos** — identity management. Sign-in surface is locked to **OIDC providers** (Google, GitHub, GitLab, Microsoft/Entra, Pocket-ID) and **passkeys** (WebAuthn passwordless). Password and email-magic-code login are off by default. TOTP and WebAuthn-2FA can be layered on top.
+- **Ory Kratos** — identity management. Sign-in surface is locked to **OIDC providers** (Google, GitHub, GitLab, Pocket-ID) and **passkeys** (WebAuthn passwordless). Password and email-magic-code login are off by default. TOTP and WebAuthn-2FA can be layered on top.
 - **Ory Hydra** — OAuth2 / OIDC provider you point your other apps at (Outline, Forgejo, etc.). One Hydra client per app.
 - **kratos-selfservice-ui-node** — reference Login / Registration / Settings / Recovery UI.
 - **Custom consent service** (`consent/`) — replaces the Login UI's consent handler. Enforces per-client `required_groups` and copies `groups` into ID + access tokens, so each app's access is gated centrally.
@@ -60,8 +60,7 @@ Admin APIs are reachable from other containers on the `ory_internal` Docker netw
 │       ├── oidc.google.jsonnet       # Google → Kratos identity mapper
 │       ├── oidc.pocket-id.jsonnet
 │       ├── oidc.github.jsonnet
-│       ├── oidc.gitlab.jsonnet
-│       └── oidc.microsoft.jsonnet
+│       └── oidc.gitlab.jsonnet
 ├── consent/                          # our Go consent service
 │   ├── main.go
 │   ├── go.mod
@@ -90,17 +89,15 @@ Edit-and-deploy loop:
 
 ## Required secrets
 
-Generate each one independently with `openssl rand -hex 32`:
-
-| Variable                       | Purpose                                |
-|--------------------------------|----------------------------------------|
-| `KRATOS_COOKIE_SECRET`         | signs Kratos session cookies           |
-| `KRATOS_CIPHER_SECRET`         | encrypts secrets at rest in Kratos     |
-| `HYDRA_SECRETS_SYSTEM`         | encrypts Hydra DB rows                 |
-| `HYDRA_SECRETS_COOKIE`         | signs Hydra cookies                    |
-| `HYDRA_PAIRWISE_SALT`          | salt for pairwise OIDC subject IDs     |
-| `LOGIN_UI_COOKIE_SECRET`       | signs Login UI cookies                 |
-| `LOGIN_UI_CSRF_COOKIE_SECRET`  | signs Login UI CSRF cookies            |
+| Variable                       | Purpose                                | Generator                              |
+|--------------------------------|----------------------------------------|----------------------------------------|
+| `KRATOS_COOKIE_SECRET`         | signs Kratos session cookies           | `openssl rand -hex 32`                 |
+| `KRATOS_CIPHER_SECRET`         | encrypts secrets at rest in Kratos     | **`openssl rand -hex 16`** (must be exactly 32 chars — xchacha20-poly1305 key length) |
+| `HYDRA_SECRETS_SYSTEM`         | encrypts Hydra DB rows                 | `openssl rand -hex 32`                 |
+| `HYDRA_SECRETS_COOKIE`         | signs Hydra cookies                    | `openssl rand -hex 32`                 |
+| `HYDRA_PAIRWISE_SALT`          | salt for pairwise OIDC subject IDs     | `openssl rand -hex 32`                 |
+| `LOGIN_UI_COOKIE_SECRET`       | signs Login UI cookies                 | `openssl rand -hex 32`                 |
+| `LOGIN_UI_CSRF_COOKIE_SECRET`  | signs Login UI CSRF cookies            | `openssl rand -hex 32`                 |
 
 ## DNS & TLS
 
@@ -122,7 +119,7 @@ The redirect URI in every provider's console is always:
 https://${KRATOS_PUBLIC_HOST}/self-service/methods/oidc/callback/<provider-id>
 ```
 
-`<provider-id>` is `google`, `pocket-id`, `github`, `gitlab`, or `microsoft`. If a provider's `*_CLIENT_ID`/`*_CLIENT_SECRET` is left blank, Kratos still starts — that provider's button just won't work, no harm done.
+`<provider-id>` is `google`, `pocket-id`, `github`, or `gitlab`. Kratos rejects providers with null/empty `client_id` or `client_secret` at startup, so every configured provider must have valid credentials. To temporarily disable one, remove its block from `config/kratos/kratos.yml.tmpl` (and the corresponding env vars from `docker-compose.yml`'s `kratos-config` env block).
 
 | Provider | Console | Notes |
 |---|---|---|
@@ -130,9 +127,8 @@ https://${KRATOS_PUBLIC_HOST}/self-service/methods/oidc/callback/<provider-id>
 | **Pocket-ID** | Your Pocket-ID admin UI → create OIDC client | Set `POCKET_ID_ISSUER_URL` to your Pocket-ID base URL (must serve `.well-known/openid-configuration`), plus client id/secret. |
 | **GitHub** | <https://github.com/settings/developers> → New OAuth App | Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`. GitHub doesn't issue `email_verified`; we trust the email returned by `user:email` scope. |
 | **GitLab** | <https://gitlab.com/-/profile/applications> (or your self-hosted instance) | Set `GITLAB_ISSUER_URL`, `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET`. Scopes: `openid profile email`. |
-| **Microsoft / Entra** | <https://entra.microsoft.com/> → App registrations → New | Set `MICROSOFT_TENANT` (`common`, `organizations`, `consumers`, or a tenant UUID), `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`. |
 
-To add another provider (Apple, Discord, …), add an entry under `selfservice.methods.oidc.config.providers` in `config/kratos/kratos.yml.tmpl`, ship a matching mapper jsonnet, and add the env vars to the `kratos-config` init container in `docker-compose.yml`.
+To add another provider (Microsoft/Entra, Apple, Discord, …), add an entry under `selfservice.methods.oidc.config.providers` in `config/kratos/kratos.yml.tmpl`, ship a matching mapper jsonnet under `config/kratos/`, list it in `config/render.sh`, and add the env vars to the `kratos-config` init container in `docker-compose.yml`.
 
 ### Passkeys (WebAuthn)
 

@@ -123,16 +123,6 @@ selfservice:
               - openid
               - profile
               - email
-          - id: microsoft
-            provider: microsoft
-            client_id: ${MICROSOFT_CLIENT_ID}
-            client_secret: ${MICROSOFT_CLIENT_SECRET}
-            microsoft_tenant: ${MICROSOFT_TENANT}
-            mapper_url: file:///etc/config/kratos/oidc.microsoft.jsonnet
-            scope:
-              - openid
-              - profile
-              - email
 
   flows:
     error:

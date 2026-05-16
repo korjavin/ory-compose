@@ -13,8 +13,7 @@ for f in identity.schema.json \
          oidc.google.jsonnet \
          oidc.pocket-id.jsonnet \
          oidc.github.jsonnet \
-         oidc.gitlab.jsonnet \
-         oidc.microsoft.jsonnet; do
+         oidc.gitlab.jsonnet; do
     cp "/src/$f" "$OUT/$f"
 done
 
