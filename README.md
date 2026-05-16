@@ -16,32 +16,40 @@ Both Kratos and Hydra run on **SQLite** with data persisted in named Docker volu
        Browser
           │
           ▼
-  ┌─────────────────┐         ┌──────────────────┐
-  │   Login UI      │ ◀──────▶│  Kratos (public) │
-  │ auth.example.com│         │ kratos.example.. │
-  └────────┬────────┘         └─────────┬────────┘
-           │                            │
-           │ consent / login challenge  │ identity
-           ▼                            │
-  ┌─────────────────┐                   │
-  │  Hydra (public) │ ◀─── identity ───┘
-  │ hydra.example.. │
-  └────────┬────────┘
-           │ OIDC discovery + tokens
-           ▼
-   Your apps (Outline, Forgejo, …) — configure them
-   with hydra.example.com/.well-known/openid-configuration
+  ┌──────────────────────────────────────────────────┐
+  │           auth.example.com (one origin)          │
+  │  ┌──────────────┐  ┌──────────────┐  ┌────────┐  │
+  │  │   Login UI   │  │   Kratos     │  │Consent │  │
+  │  │   (catch-all)│  │   (public,   │  │service │  │
+  │  │              │  │   path-routed│  │/consent│  │
+  │  │  /login etc. │  │  /self-      │  │        │  │
+  │  │              │  │   service/*) │  │        │  │
+  │  └──────────────┘  └──────┬───────┘  └────────┘  │
+  └─────────────────────────────│────────────────────┘
+                                │ identity
+                                ▼
+                       ┌──────────────────┐
+                       │  Hydra (public)  │
+                       │ hydra.example.com│
+                       └────────┬─────────┘
+                                │ OIDC discovery + tokens
+                                ▼
+                Your apps (Outline, Forgejo, …) — configure them
+                with hydra.example.com/.well-known/openid-configuration
 ```
 
 Trust boundaries:
 
 | Endpoint                   | Network           | Exposure                       |
 |----------------------------|-------------------|--------------------------------|
-| Kratos public (`:4433`)    | traefik + internal| `https://${KRATOS_PUBLIC_HOST}`|
+| Login UI      (`:3000`)    | traefik + internal| `https://${LOGIN_UI_HOST}` (catch-all paths) |
+| Kratos public (`:4433`)    | traefik + internal| `https://${LOGIN_UI_HOST}/self-service/…`, `/.well-known/…`, `/sessions/…`, `/schemas/…`, `/health/…` (path-routed, priority 90) |
+| Consent       (`:3001`)    | traefik + internal| `https://${LOGIN_UI_HOST}/consent` (priority 100) |
 | Kratos admin  (`:4434`)    | internal only     | never on the public internet   |
 | Hydra public  (`:4444`)    | traefik + internal| `https://${HYDRA_PUBLIC_HOST}` |
 | Hydra admin   (`:4445`)    | internal only     | never on the public internet   |
-| Login UI      (`:3000`)    | traefik + internal| `https://${LOGIN_UI_HOST}`     |
+
+Login UI, Kratos public, and Consent all live on the **same origin** (`LOGIN_UI_HOST`) so CSRF and session cookies just work. Kratos's per-flow CSRF cookies don't honor `serve.public.cookies.domain` in v1.3.x, so a separate-subdomain layout produces an infinite redirect loop on every flow — same-origin sidesteps the bug entirely.
 
 Admin APIs are reachable from other containers on the `ory_internal` Docker network. To talk to them from your laptop, use `docker exec ory-hydra hydra ...` or open a temporary SSH tunnel.
 
@@ -132,12 +140,11 @@ Edit-and-deploy loop:
 
 ## DNS & TLS
 
-Set up three DNS A/AAAA records pointing to your Hetzner host:
+Set up **two** DNS A/AAAA records pointing to your Hetzner host:
 
 ```
-kratos.example.com   → host
-hydra.example.com    → host
-auth.example.com     → host
+auth.example.com    → host    (Login UI + Kratos public + Consent, all same-origin)
+hydra.example.com   → host    (Hydra public OAuth2/OIDC)
 ```
 
 Traefik handles certs via the `myresolver` (or whatever you set in `TRAEFIK_CERTRESOLVER`). The cookie domain must be a parent that covers all three — set `COOKIE_DOMAIN=.example.com`.
@@ -147,7 +154,7 @@ Traefik handles certs via the `myresolver` (or whatever you set in `TRAEFIK_CERT
 The redirect URI in every provider's console is always:
 
 ```
-https://${KRATOS_PUBLIC_HOST}/self-service/methods/oidc/callback/<provider-id>
+https://${LOGIN_UI_HOST}/self-service/methods/oidc/callback/<provider-id>
 ```
 
 `<provider-id>` is `google`, `pocket-id`, `github`, or `gitlab`. Kratos rejects providers with null/empty `client_id` or `client_secret` at startup, so every configured provider must have valid credentials. To temporarily disable one, remove its block from `config/kratos/kratos.yml.tmpl` (and the corresponding env vars from `docker-compose.yml`'s `kratos-config` env block).
@@ -322,7 +329,7 @@ Bump the upstream tags in `.github/workflows/vendor-images.yml` when new Ory rel
 curl -s https://hydra.example.com/.well-known/openid-configuration | jq .issuer
 
 # 2. Kratos health
-curl -s https://kratos.example.com/health/ready
+curl -s https://auth.example.com/health/ready
 
 # 3. Browser: visit https://auth.example.com/  → log in via Google or Pocket-ID
 ```

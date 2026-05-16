@@ -23,7 +23,6 @@ services:
     restart: "no"
     environment:
       KRATOS_DSN: ${KRATOS_DSN:-sqlite:///var/lib/kratos/db.sqlite?_fk=true&mode=rwc}
-      KRATOS_PUBLIC_HOST: ${KRATOS_PUBLIC_HOST}
       HYDRA_PUBLIC_HOST: ${HYDRA_PUBLIC_HOST}
       LOGIN_UI_HOST: ${LOGIN_UI_HOST}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN}
@@ -93,9 +92,14 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK_NAME:-traefik_default}"
-      - "traefik.http.routers.kratos.rule=Host(`${KRATOS_PUBLIC_HOST}`)"
+      # Kratos public is co-located on LOGIN_UI_HOST so it shares the origin
+      # with the Login UI (cookies/CSRF just work). Each Kratos public path
+      # prefix gets its own high-priority router; the login-ui catch-all
+      # handles everything else at priority 10.
+      - "traefik.http.routers.kratos.rule=Host(`${LOGIN_UI_HOST}`) && (PathPrefix(`/self-service`) || PathPrefix(`/.well-known`) || PathPrefix(`/sessions`) || PathPrefix(`/schemas`) || PathPrefix(`/health`))"
       - "traefik.http.routers.kratos.entrypoints=websecure"
       - "traefik.http.routers.kratos.tls.certresolver=${TRAEFIK_CERTRESOLVER:-myresolver}"
+      - "traefik.http.routers.kratos.priority=90"
       - "traefik.http.services.kratos.loadbalancer.server.port=4433"
 
   # -------------------------------------------------------------------------
@@ -131,7 +135,7 @@ services:
       URLS_LOGOUT: https://${LOGIN_UI_HOST}/logout
       URLS_ERROR: https://${LOGIN_UI_HOST}/error
       URLS_POST_LOGOUT_REDIRECT: https://${LOGIN_UI_HOST}/
-      URLS_IDENTITY_PROVIDER_PUBLICURL: https://${KRATOS_PUBLIC_HOST}/
+      URLS_IDENTITY_PROVIDER_PUBLICURL: https://${LOGIN_UI_HOST}/
       URLS_IDENTITY_PROVIDER_URL: http://kratos:4434/
       SECRETS_SYSTEM: ${HYDRA_SECRETS_SYSTEM}
       SECRETS_COOKIE: ${HYDRA_SECRETS_COOKIE}
@@ -175,7 +179,7 @@ services:
       PORT: "3000"
       SECURITY_MODE: ""
       KRATOS_PUBLIC_URL: http://kratos:4433/
-      KRATOS_BROWSER_URL: https://${KRATOS_PUBLIC_HOST}/
+      KRATOS_BROWSER_URL: https://${LOGIN_UI_HOST}/
       KRATOS_ADMIN_URL: http://kratos:4434/
       HYDRA_ADMIN_URL: http://hydra:4445/
       BASE_URL: https://${LOGIN_UI_HOST}/
