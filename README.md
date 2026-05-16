@@ -2,7 +2,7 @@
 
 A git-ops Docker Compose deployment that gives you:
 
-- **Ory Kratos** — identity management. Social sign-in via Google, GitHub, GitLab, Microsoft/Entra, Pocket-ID; passkeys (WebAuthn); password fallback.
+- **Ory Kratos** — identity management. Sign-in surface is locked to **OIDC providers** (Google, GitHub, GitLab, Microsoft/Entra, Pocket-ID) and **passkeys** (WebAuthn passwordless). Password and email-magic-code login are off by default. TOTP and WebAuthn-2FA can be layered on top.
 - **Ory Hydra** — OAuth2 / OIDC provider you point your other apps at (Outline, Forgejo, etc.). One Hydra client per app.
 - **kratos-selfservice-ui-node** — reference Login / Registration / Settings / Recovery UI.
 - **Custom consent service** (`consent/`) — replaces the Login UI's consent handler. Enforces per-client `required_groups` and copies `groups` into ID + access tokens, so each app's access is gated centrally.
@@ -132,7 +132,7 @@ Both passkey-passwordless and WebAuthn-2FA methods are enabled by default. `WEBA
 
 ## Invitations: pre-create identities + send a 1h link
 
-Public registration is left enabled (toggle with `KRATOS_PASSWORD_ENABLED=false` if you want to lock it down). Most of the time though, you'll invite colleagues explicitly — that lets you pin their group memberships *before* they ever log in.
+The default sign-in surface is OIDC + passkey only — no password or email-magic-code login. So practically the only way someone gets in is either (a) you invite them, or (b) they already have a Google/GitHub/etc. account that maps to an existing Kratos identity (which doesn't happen by default — see below). Either way, invitation is the primary onboarding path.
 
 Use the `invite` CLI. It hits Kratos's admin API on the internal Docker network — run it on the host:
 

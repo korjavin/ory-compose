@@ -33,6 +33,8 @@ selfservice:
     - https://${HYDRA_PUBLIC_HOST}
 
   methods:
+    # Disabled by default — only OIDC and passkeys are real sign-in paths.
+    # Flip KRATOS_PASSWORD_ENABLED to true if you ever need a password fallback.
     password:
       enabled: ${KRATOS_PASSWORD_ENABLED}
     totp:
@@ -41,10 +43,17 @@ selfservice:
         issuer: ${KRATOS_TOTP_ISSUER}
     lookup_secret:
       enabled: true
+    # Legacy magic-link recovery — superseded by `code`. Keep off.
     link:
-      enabled: true
+      enabled: false
+    # `code` is kept enabled for the recovery flow (invite links route through
+    # this strategy). `passwordless_enabled=false` blocks email-magic-code login
+    # so the only way in is still OIDC or passkey.
     code:
       enabled: true
+      passwordless_enabled: ${KRATOS_CODE_LOGIN_ENABLED}
+      config:
+        lifespan: ${KRATOS_RECOVERY_LIFESPAN}
     passkey:
       enabled: true
       config:
