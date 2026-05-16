@@ -50,8 +50,14 @@ type identity struct {
 			First string `json:"first"`
 			Last  string `json:"last"`
 		} `json:"name"`
-		Groups []string `json:"groups"`
 	} `json:"traits"`
+	// MetadataAdmin is the admin-only metadata bucket — users can't write
+	// to it from the Settings flow, so it's where group assignments live.
+	// The invite CLI populates this; the consent service reads from here
+	// rather than from traits.
+	MetadataAdmin struct {
+		Groups []string `json:"groups"`
+	} `json:"metadata_admin"`
 }
 
 type redirect struct {
@@ -112,9 +118,9 @@ func (s *server) handleConsent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	required := requiredGroups(cr.Client.Metadata)
-	if len(required) > 0 && !overlap(ident.Traits.Groups, required) {
+	if len(required) > 0 && !overlap(ident.MetadataAdmin.Groups, required) {
 		log.Printf("consent: deny client=%s subject=%s user_groups=%v required=%v",
-			cr.Client.ClientID, cr.Subject, ident.Traits.Groups, required)
+			cr.Client.ClientID, cr.Subject, ident.MetadataAdmin.Groups, required)
 		redirectTo, err := s.rejectConsent(ctx, challenge, required)
 		if err != nil {
 			log.Printf("consent: reject: %v", err)
@@ -126,7 +132,7 @@ func (s *server) handleConsent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("consent: allow client=%s subject=%s groups=%v",
-		cr.Client.ClientID, cr.Subject, ident.Traits.Groups)
+		cr.Client.ClientID, cr.Subject, ident.MetadataAdmin.Groups)
 	redirectTo, err := s.acceptConsent(ctx, challenge, cr, ident)
 	if err != nil {
 		log.Printf("consent: accept: %v", err)
@@ -201,10 +207,10 @@ func (s *server) acceptConsent(ctx context.Context, challenge string, cr *consen
 				"name":        joinName(ident),
 				"given_name":  ident.Traits.Name.First,
 				"family_name": ident.Traits.Name.Last,
-				"groups":      ident.Traits.Groups,
+				"groups":      ident.MetadataAdmin.Groups,
 			},
 			"access_token": map[string]interface{}{
-				"groups": ident.Traits.Groups,
+				"groups": ident.MetadataAdmin.Groups,
 			},
 		},
 	}

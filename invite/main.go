@@ -33,14 +33,14 @@ import (
 )
 
 type createIdentityReq struct {
-	SchemaID string `json:"schema_id"`
-	Traits   traits `json:"traits"`
+	SchemaID      string        `json:"schema_id"`
+	Traits        traits        `json:"traits"`
+	MetadataAdmin metadataAdmin `json:"metadata_admin"`
 }
 
 type traits struct {
-	Email  string   `json:"email"`
-	Name   nameT    `json:"name,omitempty"`
-	Groups []string `json:"groups"`
+	Email string `json:"email"`
+	Name  nameT  `json:"name,omitempty"`
 }
 
 type nameT struct {
@@ -48,9 +48,18 @@ type nameT struct {
 	Last  string `json:"last,omitempty"`
 }
 
+// metadataAdmin lives outside `traits` so users can NOT edit it via the
+// Settings flow — only the admin API can write metadata_admin. This is
+// where `groups` belongs, otherwise any logged-in user could self-grant
+// `outline-users`/`admins`/etc. and bypass invitations.
+type metadataAdmin struct {
+	Groups []string `json:"groups"`
+}
+
 type identityResp struct {
-	ID     string `json:"id"`
-	Traits traits `json:"traits"`
+	ID            string        `json:"id"`
+	Traits        traits        `json:"traits"`
+	MetadataAdmin metadataAdmin `json:"metadata_admin"`
 }
 
 type recoveryReq struct {
@@ -116,10 +125,10 @@ func main() {
 	ident, err := createIdentity(ctx, client, admin, createIdentityReq{
 		SchemaID: "default",
 		Traits: traits{
-			Email:  email,
-			Name:   nameT{First: *firstName, Last: *lastName},
-			Groups: groups,
+			Email: email,
+			Name:  nameT{First: *firstName, Last: *lastName},
 		},
+		MetadataAdmin: metadataAdmin{Groups: groups},
 	})
 	if err != nil {
 		log.Fatalf("create identity: %v", err)

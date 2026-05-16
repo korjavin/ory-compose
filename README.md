@@ -187,7 +187,7 @@ docker run --rm --network=ory_internal \
 
 What happens:
 
-1. The CLI creates a Kratos identity with `traits.email = alice@example.com` and `traits.groups = ["outline-users", "notan-users"]`.
+1. The CLI creates a Kratos identity with `traits.email = alice@example.com` and `metadata_admin.groups = ["outline-users", "notan-users"]`. Groups deliberately live under `metadata_admin` (not `traits`) so the user can NOT self-edit them via the Settings page.
 2. It generates a Kratos recovery link valid for `KRATOS_RECOVERY_LIFESPAN` (default 1h).
 3. It prints the link.
 
@@ -266,7 +266,7 @@ Changes take effect on the next consent (i.e. the next time a user logs in fresh
 `consent/` is a ~250-line Go service that owns the `/consent` URL on `auth.example.com`. On every consent request it:
 
 1. Asks Hydra for the consent challenge details (`/admin/oauth2/auth/requests/consent`).
-2. Asks Kratos for the identity (`/admin/identities/<subject>`) — pulls `traits.groups`, `email`, `name`.
+2. Asks Kratos for the identity (`/admin/identities/<subject>`) — pulls `metadata_admin.groups` (admin-only, not user-editable), plus `traits.email`, `traits.name`.
 3. Reads `client.metadata.required_groups`. If non-empty and the user is in none of them → reject. Otherwise → accept.
 4. On accept, copies `groups` into both `id_token.groups` and `access_token.groups`, plus standard email/name claims.
 
@@ -280,9 +280,10 @@ Kratos has **no built-in admin UI**. For day-to-day work use the `invite` CLI ab
 # List identities
 docker exec -it ory-kratos kratos list identities --endpoint http://localhost:4434
 
-# Change someone's groups (replaces the list)
+# Change someone's groups (replaces the list).
+# Groups live under metadata_admin — admin-only, not user-editable from Settings.
 docker exec -it ory-kratos kratos patch identity --endpoint http://localhost:4434 \
-  <id> -p '[{"op":"replace","path":"/traits/groups","value":["admin","outline-users","forgejo-users"]}]'
+  <id> -p '[{"op":"replace","path":"/metadata_admin/groups","value":["admin","outline-users","forgejo-users"]}]'
 
 # Revoke all of someone's sessions immediately (e.g. after offboarding)
 docker exec -it ory-kratos kratos delete identity --endpoint http://localhost:4434 <id>

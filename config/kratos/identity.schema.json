@@ -45,15 +45,6 @@
               "type": "string"
             }
           }
-        },
-        "groups": {
-          "type": "array",
-          "title": "Groups",
-          "description": "List of group names this identity belongs to. Mirrored as a Hydra access-token claim.",
-          "items": {
-            "type": "string"
-          },
-          "default": []
         }
       },
       "required": ["email"],

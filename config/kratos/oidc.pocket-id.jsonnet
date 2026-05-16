@@ -10,7 +10,6 @@ local claims = {
         first: if 'given_name' in claims then claims.given_name else '',
         last: if 'family_name' in claims then claims.family_name else '',
       },
-      groups: if 'groups' in claims then claims.groups else [],
     },
   },
 }
