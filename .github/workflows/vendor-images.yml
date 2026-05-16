@@ -1,0 +1,88 @@
+name: Vendor Ory Images to GHCR
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'  # Weekly on Monday at 04:00 UTC
+  workflow_dispatch:
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - upstream: oryd/kratos:v1.3.1
+            target: kratos-vendor
+          - upstream: oryd/hydra:v2.3.0
+            target: hydra-vendor
+          - upstream: oryd/kratos-selfservice-ui-node:v1.3.1
+            target: kratos-selfservice-ui-node-vendor
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and re-push image
+        env:
+          UPSTREAM_IMAGE: ${{ matrix.upstream }}
+          GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.target }}
+        run: |
+          docker pull "${UPSTREAM_IMAGE}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${UPSTREAM_IMAGE}" | cut -d@ -f2)
+          docker tag "${UPSTREAM_IMAGE}" "${GHCR_IMAGE}:latest"
+          docker push "${GHCR_IMAGE}:latest"
+          echo "Vendored ${UPSTREAM_IMAGE} → ${GHCR_IMAGE}:latest (digest: ${DIGEST})"
+          echo "${{ matrix.target }}@${DIGEST}" >> "${GITHUB_WORKSPACE}/vendor-digests-${{ matrix.target }}.log"
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.target }}
+          path: vendor-digests-${{ matrix.target }}.log
+
+  publish-digests:
+    needs: vendor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: digests
+          merge-multiple: true
+
+      - name: Append digests to deploy branch and push
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git checkout -B deploy
+          {
+            echo ""
+            echo "## Vendor run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            cat digests/*.log
+          } >> vendor-digests.log
+          git add vendor-digests.log
+          git commit -m "chore: vendor ory images $(date -u +%Y-%m-%d)" || echo "Nothing to commit"
+          git push origin deploy --force
+
+      - name: Trigger Portainer Redeploy Webhook
+        uses: distributhor/workflow-webhook@2381f0e9c7b6bf061fb1405bd0804b8706116369 # v3.0.8
+        with:
+          webhook_url: ${{ secrets.PORTAINER_REDEPLOY_HOOK }}
+          webhook_secret: "trigger"

@@ -1,0 +1,155 @@
+version: v1.3.1
+
+dsn: ${KRATOS_DSN}
+
+serve:
+  public:
+    base_url: https://${KRATOS_PUBLIC_HOST}/
+    cors:
+      enabled: true
+      allowed_origins:
+        - https://${LOGIN_UI_HOST}
+        - https://${HYDRA_PUBLIC_HOST}
+      allowed_methods:
+        - POST
+        - GET
+        - PUT
+        - PATCH
+        - DELETE
+      allowed_headers:
+        - Authorization
+        - Content-Type
+        - X-Session-Token
+      exposed_headers:
+        - Content-Type
+        - Set-Cookie
+  admin:
+    base_url: http://kratos:4434/
+
+selfservice:
+  default_browser_return_url: https://${LOGIN_UI_HOST}/
+  allowed_return_urls:
+    - https://${LOGIN_UI_HOST}
+    - https://${HYDRA_PUBLIC_HOST}
+
+  methods:
+    password:
+      enabled: true
+    totp:
+      enabled: true
+      config:
+        issuer: ${KRATOS_TOTP_ISSUER}
+    lookup_secret:
+      enabled: true
+    link:
+      enabled: true
+    code:
+      enabled: true
+    oidc:
+      enabled: true
+      config:
+        providers:
+          - id: google
+            provider: google
+            client_id: ${GOOGLE_CLIENT_ID}
+            client_secret: ${GOOGLE_CLIENT_SECRET}
+            mapper_url: file:///etc/config/kratos/oidc.google.jsonnet
+            scope:
+              - openid
+              - profile
+              - email
+            requested_claims:
+              id_token:
+                email:
+                  essential: true
+                email_verified:
+                  essential: true
+                given_name: null
+                family_name: null
+          - id: pocket-id
+            provider: generic
+            client_id: ${POCKET_ID_CLIENT_ID}
+            client_secret: ${POCKET_ID_CLIENT_SECRET}
+            issuer_url: ${POCKET_ID_ISSUER_URL}
+            mapper_url: file:///etc/config/kratos/oidc.pocket-id.jsonnet
+            scope:
+              - openid
+              - profile
+              - email
+              - groups
+
+  flows:
+    error:
+      ui_url: https://${LOGIN_UI_HOST}/error
+    settings:
+      ui_url: https://${LOGIN_UI_HOST}/settings
+      privileged_session_max_age: 15m
+      required_aal: highest_available
+    recovery:
+      enabled: true
+      ui_url: https://${LOGIN_UI_HOST}/recovery
+      use: code
+    verification:
+      enabled: true
+      ui_url: https://${LOGIN_UI_HOST}/verification
+      use: code
+      after:
+        default_browser_return_url: https://${LOGIN_UI_HOST}/
+    logout:
+      after:
+        default_browser_return_url: https://${LOGIN_UI_HOST}/login
+    login:
+      ui_url: https://${LOGIN_UI_HOST}/login
+      lifespan: 10m
+    registration:
+      lifespan: 10m
+      ui_url: https://${LOGIN_UI_HOST}/registration
+      after:
+        password:
+          hooks:
+            - hook: session
+            - hook: show_verification_ui
+        oidc:
+          hooks:
+            - hook: session
+
+oauth2_provider:
+  url: http://hydra:4445
+
+log:
+  level: ${KRATOS_LOG_LEVEL}
+  format: json
+  leak_sensitive_values: false
+
+secrets:
+  cookie:
+    - ${KRATOS_COOKIE_SECRET}
+  cipher:
+    - ${KRATOS_CIPHER_SECRET}
+
+ciphers:
+  algorithm: xchacha20-poly1305
+
+hashers:
+  algorithm: bcrypt
+  bcrypt:
+    cost: 8
+
+identity:
+  default_schema_id: default
+  schemas:
+    - id: default
+      url: file:///etc/config/kratos/identity.schema.json
+
+courier:
+  smtp:
+    connection_uri: ${KRATOS_SMTP_CONNECTION_URI}
+    from_address: ${KRATOS_SMTP_FROM_ADDRESS}
+    from_name: ${KRATOS_SMTP_FROM_NAME}
+
+session:
+  lifespan: 720h
+  cookie:
+    domain: ${COOKIE_DOMAIN}
+    path: /
+    same_site: Lax

@@ -1,0 +1,209 @@
+version: "3.8"
+
+# ---------------------------------------------------------------------------
+# Ory stack: Kratos (identity) + Hydra (OAuth2/OIDC provider) + Login UI
+#
+# All persistent data is on SQLite, stored in named volumes. All per-deployment
+# configuration is supplied via environment variables (Portainer stack envs).
+# Static, non-secret config (Kratos identity schema, OIDC mappers, kratos.yml
+# template) lives under ./config and is rendered at container start by an
+# envsubst init container.
+# ---------------------------------------------------------------------------
+
+services:
+  # -------------------------------------------------------------------------
+  # Renders config/kratos/kratos.yml.tmpl -> /etc/config/kratos/kratos.yml
+  # using runtime env vars. Runs once on every restart.
+  # -------------------------------------------------------------------------
+  kratos-config:
+    image: ${ENVSUBST_IMAGE:-alpine:3.20}
+    container_name: ${KRATOS_CONFIG_CONTAINER_NAME:-ory-kratos-config}
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache gettext >/dev/null
+        envsubst < /src/kratos.yml.tmpl > /out/kratos.yml
+        cp /src/identity.schema.json /out/identity.schema.json
+        cp /src/oidc.google.jsonnet /out/oidc.google.jsonnet
+        cp /src/oidc.pocket-id.jsonnet /out/oidc.pocket-id.jsonnet
+        echo "Rendered kratos config:"
+        ls -la /out
+    environment:
+      KRATOS_DSN: ${KRATOS_DSN:-sqlite:///var/lib/kratos/db.sqlite?_fk=true&mode=rwc}
+      KRATOS_PUBLIC_HOST: ${KRATOS_PUBLIC_HOST}
+      HYDRA_PUBLIC_HOST: ${HYDRA_PUBLIC_HOST}
+      LOGIN_UI_HOST: ${LOGIN_UI_HOST}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN}
+      KRATOS_LOG_LEVEL: ${KRATOS_LOG_LEVEL:-info}
+      KRATOS_TOTP_ISSUER: ${KRATOS_TOTP_ISSUER:-Ory Kratos}
+      KRATOS_COOKIE_SECRET: ${KRATOS_COOKIE_SECRET}
+      KRATOS_CIPHER_SECRET: ${KRATOS_CIPHER_SECRET}
+      KRATOS_SMTP_CONNECTION_URI: ${KRATOS_SMTP_CONNECTION_URI:-smtps://test:test@mailslurper:1025/?skip_ssl_verify=true}
+      KRATOS_SMTP_FROM_ADDRESS: ${KRATOS_SMTP_FROM_ADDRESS:-no-reply@example.com}
+      KRATOS_SMTP_FROM_NAME: ${KRATOS_SMTP_FROM_NAME:-Ory Kratos}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      POCKET_ID_CLIENT_ID: ${POCKET_ID_CLIENT_ID:-}
+      POCKET_ID_CLIENT_SECRET: ${POCKET_ID_CLIENT_SECRET:-}
+      POCKET_ID_ISSUER_URL: ${POCKET_ID_ISSUER_URL:-}
+    volumes:
+      - ./config/kratos:/src:ro
+      - kratos-rendered:/out
+    networks:
+      - internal
+
+  # -------------------------------------------------------------------------
+  # One-shot migrator. Brings the SQLite schema up to date, then exits 0.
+  # -------------------------------------------------------------------------
+  kratos-migrate:
+    image: ${KRATOS_IMAGE:-ghcr.io/korjavin/kratos-vendor:latest}
+    container_name: ${KRATOS_MIGRATE_CONTAINER_NAME:-ory-kratos-migrate}
+    restart: "no"
+    depends_on:
+      kratos-config:
+        condition: service_completed_successfully
+    environment:
+      DSN: ${KRATOS_DSN:-sqlite:///var/lib/kratos/db.sqlite?_fk=true&mode=rwc}
+    command: -c /etc/config/kratos/kratos.yml migrate sql -e --yes
+    volumes:
+      - kratos-data:/var/lib/kratos
+      - kratos-rendered:/etc/config/kratos:ro
+    networks:
+      - internal
+
+  kratos:
+    image: ${KRATOS_IMAGE:-ghcr.io/korjavin/kratos-vendor:latest}
+    container_name: ${KRATOS_CONTAINER_NAME:-ory-kratos}
+    restart: unless-stopped
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+    environment:
+      DSN: ${KRATOS_DSN:-sqlite:///var/lib/kratos/db.sqlite?_fk=true&mode=rwc}
+      LOG_LEVEL: ${KRATOS_LOG_LEVEL:-info}
+    command: serve all -c /etc/config/kratos/kratos.yml
+    volumes:
+      - kratos-data:/var/lib/kratos
+      - kratos-rendered:/etc/config/kratos:ro
+    networks:
+      - internal
+      - traefik_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK_NAME:-traefik_default}"
+      - "traefik.http.routers.kratos.rule=Host(`${KRATOS_PUBLIC_HOST}`)"
+      - "traefik.http.routers.kratos.entrypoints=websecure"
+      - "traefik.http.routers.kratos.tls.certresolver=${TRAEFIK_CERTRESOLVER:-myresolver}"
+      - "traefik.http.services.kratos.loadbalancer.server.port=4433"
+
+  # -------------------------------------------------------------------------
+  # Hydra (OAuth2 / OIDC provider). Configured 100% via env vars.
+  # -------------------------------------------------------------------------
+  hydra-migrate:
+    image: ${HYDRA_IMAGE:-ghcr.io/korjavin/hydra-vendor:latest}
+    container_name: ${HYDRA_MIGRATE_CONTAINER_NAME:-ory-hydra-migrate}
+    restart: "no"
+    environment:
+      DSN: ${HYDRA_DSN:-sqlite:///var/lib/hydra/db.sqlite?_fk=true&mode=rwc}
+    command: migrate sql -e --yes
+    volumes:
+      - hydra-data:/var/lib/hydra
+    networks:
+      - internal
+
+  hydra:
+    image: ${HYDRA_IMAGE:-ghcr.io/korjavin/hydra-vendor:latest}
+    container_name: ${HYDRA_CONTAINER_NAME:-ory-hydra}
+    restart: unless-stopped
+    depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
+    environment:
+      DSN: ${HYDRA_DSN:-sqlite:///var/lib/hydra/db.sqlite?_fk=true&mode=rwc}
+      URLS_SELF_ISSUER: https://${HYDRA_PUBLIC_HOST}/
+      URLS_SELF_PUBLIC: https://${HYDRA_PUBLIC_HOST}/
+      URLS_CONSENT: https://${LOGIN_UI_HOST}/consent
+      URLS_LOGIN: https://${LOGIN_UI_HOST}/login
+      URLS_LOGOUT: https://${LOGIN_UI_HOST}/logout
+      URLS_ERROR: https://${LOGIN_UI_HOST}/error
+      URLS_POST_LOGOUT_REDIRECT: https://${LOGIN_UI_HOST}/
+      URLS_IDENTITY_PROVIDER_PUBLICURL: https://${KRATOS_PUBLIC_HOST}/
+      URLS_IDENTITY_PROVIDER_URL: http://kratos:4434/
+      SECRETS_SYSTEM: ${HYDRA_SECRETS_SYSTEM}
+      SECRETS_COOKIE: ${HYDRA_SECRETS_COOKIE}
+      OIDC_SUBJECT_IDENTIFIERS_SUPPORTED_TYPES: public,pairwise
+      OIDC_SUBJECT_IDENTIFIERS_PAIRWISE_SALT: ${HYDRA_PAIRWISE_SALT}
+      OAUTH2_EXPOSE_INTERNAL_ERRORS: ${HYDRA_EXPOSE_INTERNAL_ERRORS:-false}
+      LOG_LEVEL: ${HYDRA_LOG_LEVEL:-info}
+      LOG_LEAK_SENSITIVE_VALUES: ${HYDRA_LOG_LEAK_SENSITIVE_VALUES:-false}
+      SERVE_COOKIES_SAME_SITE_MODE: Lax
+      STRATEGIES_ACCESS_TOKEN: ${HYDRA_ACCESS_TOKEN_STRATEGY:-jwt}
+      TTL_ACCESS_TOKEN: ${HYDRA_TTL_ACCESS_TOKEN:-1h}
+      TTL_REFRESH_TOKEN: ${HYDRA_TTL_REFRESH_TOKEN:-720h}
+      TTL_ID_TOKEN: ${HYDRA_TTL_ID_TOKEN:-1h}
+      TTL_AUTH_CODE: ${HYDRA_TTL_AUTH_CODE:-10m}
+    command: serve all --dev=${HYDRA_DEV_MODE:-false}
+    volumes:
+      - hydra-data:/var/lib/hydra
+    networks:
+      - internal
+      - traefik_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK_NAME:-traefik_default}"
+      - "traefik.http.routers.hydra.rule=Host(`${HYDRA_PUBLIC_HOST}`)"
+      - "traefik.http.routers.hydra.entrypoints=websecure"
+      - "traefik.http.routers.hydra.tls.certresolver=${TRAEFIK_CERTRESOLVER:-myresolver}"
+      - "traefik.http.services.hydra.loadbalancer.server.port=4444"
+
+  # -------------------------------------------------------------------------
+  # Reference Login/Registration/Consent UI for Kratos + Hydra.
+  # https://github.com/ory/kratos-selfservice-ui-node
+  # -------------------------------------------------------------------------
+  login-ui:
+    image: ${LOGIN_UI_IMAGE:-ghcr.io/korjavin/kratos-selfservice-ui-node-vendor:latest}
+    container_name: ${LOGIN_UI_CONTAINER_NAME:-ory-login-ui}
+    restart: unless-stopped
+    depends_on:
+      - kratos
+      - hydra
+    environment:
+      PORT: "3000"
+      SECURITY_MODE: ""
+      KRATOS_PUBLIC_URL: http://kratos:4433/
+      KRATOS_BROWSER_URL: https://${KRATOS_PUBLIC_HOST}/
+      KRATOS_ADMIN_URL: http://kratos:4434/
+      HYDRA_ADMIN_URL: http://hydra:4445/
+      BASE_URL: https://${LOGIN_UI_HOST}/
+      COOKIE_SECRET: ${LOGIN_UI_COOKIE_SECRET}
+      CSRF_COOKIE_NAME: ${LOGIN_UI_CSRF_COOKIE_NAME:-__Host-ory-ui-csrf}
+      CSRF_COOKIE_SECRET: ${LOGIN_UI_CSRF_COOKIE_SECRET}
+      DANGEROUSLY_DISABLE_SECURE_CSRF_COOKIES: ${LOGIN_UI_DISABLE_SECURE_CSRF:-false}
+    networks:
+      - internal
+      - traefik_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK_NAME:-traefik_default}"
+      - "traefik.http.routers.login-ui.rule=Host(`${LOGIN_UI_HOST}`)"
+      - "traefik.http.routers.login-ui.entrypoints=websecure"
+      - "traefik.http.routers.login-ui.tls.certresolver=${TRAEFIK_CERTRESOLVER:-myresolver}"
+      - "traefik.http.services.login-ui.loadbalancer.server.port=3000"
+
+networks:
+  internal:
+    name: ${INTERNAL_NETWORK_NAME:-ory_internal}
+  traefik_network:
+    external: true
+    name: ${TRAEFIK_NETWORK_NAME:-traefik_default}
+
+volumes:
+  kratos-data:
+    name: ${KRATOS_VOLUME_NAME:-ory_kratos-data}
+  kratos-rendered:
+    name: ${KRATOS_RENDERED_VOLUME_NAME:-ory_kratos-rendered}
+  hydra-data:
+    name: ${HYDRA_VOLUME_NAME:-ory_hydra-data}
