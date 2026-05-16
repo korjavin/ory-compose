@@ -51,11 +51,13 @@ Admin APIs are reachable from other containers on the `ory_internal` Docker netw
 .
 ├── docker-compose.yml
 ├── .env.example
-├── config/
+├── config/                           # built into ory-kratos-config image
+│   ├── Dockerfile                    # alpine + gettext, baked config files
+│   ├── render.sh                     # entrypoint: envsubst + copy
 │   └── kratos/
-│       ├── kratos.yml.tmpl          # rendered at startup with envsubst
-│       ├── identity.schema.json     # user shape (incl. groups[])
-│       ├── oidc.google.jsonnet      # Google → Kratos identity mapper
+│       ├── kratos.yml.tmpl           # rendered at startup with envsubst
+│       ├── identity.schema.json      # user shape (incl. groups[])
+│       ├── oidc.google.jsonnet       # Google → Kratos identity mapper
 │       ├── oidc.pocket-id.jsonnet
 │       ├── oidc.github.jsonnet
 │       ├── oidc.gitlab.jsonnet
@@ -78,7 +80,13 @@ Admin APIs are reachable from other containers on the `ory_internal` Docker netw
 
 You said you don't want a `.env` file on the server — Portainer holds the values. The compose file references env names with sensible defaults; only **hostnames** and **secrets** truly need to be set in Portainer's stack-env panel.
 
-Kratos itself doesn't natively read `${VAR}` from its YAML config. We work around that with a tiny init container (`kratos-config`) that runs `envsubst` on `kratos.yml.tmpl` and writes the rendered `kratos.yml` into a shared volume that the Kratos service mounts read-only.
+Kratos itself doesn't natively read `${VAR}` from its YAML config. We work around that with a tiny init container `kratos-config` built from `./config/`. The image bakes in `gettext` (for `envsubst`), the `kratos.yml.tmpl` template, all OIDC mapper jsonnets, and the identity schema. On every restart its entrypoint renders the template against the current Portainer env vars and drops the result into a shared volume that Kratos mounts read-only at `/etc/config/kratos`.
+
+Edit-and-deploy loop:
+
+1. Edit `config/kratos/kratos.yml.tmpl` (or any other file in `config/`) on master.
+2. The `Build Custom Services` workflow rebuilds `ghcr.io/<owner>/ory-kratos-config:latest` and force-pushes the `deploy` branch.
+3. Portainer pulls the new image on redeploy; the next `kratos-config` run renders the updated template.
 
 ## Required secrets
 
@@ -262,9 +270,9 @@ The `invite` CLI assigns groups as `<app>-users` (e.g. `outline-users`, `notan-u
    ```
 2. **Before first deploy, run the image-building workflows once manually:**
    - `Vendor Ory Images to GHCR` — mirrors `oryd/kratos`, `oryd/hydra`, `oryd/kratos-selfservice-ui-node` to your GHCR namespace.
-   - `Build Custom Services` — builds `ory-consent` and `ory-invite` from this repo into GHCR.
+   - `Build Custom Services` — builds `ory-consent`, `ory-invite`, and `ory-kratos-config` from this repo into GHCR.
 
-   After both succeed, four images exist under `ghcr.io/<owner>/`: `kratos-vendor`, `hydra-vendor`, `kratos-selfservice-ui-node-vendor`, `ory-consent`. (`ory-invite` exists too but is only used via `docker run` on demand.)
+   After both succeed, five images exist under `ghcr.io/<owner>/`: `kratos-vendor`, `hydra-vendor`, `kratos-selfservice-ui-node-vendor`, `ory-consent`, `ory-kratos-config`. (`ory-invite` exists too but is only used via `docker run` on demand.)
 3. **Create the stack in Portainer** → "Repository" mode, point at this repo, branch `deploy`.
 4. **Paste the env vars** from `.env.example` into Portainer's env panel (replace placeholder values).
 5. Hit **Deploy**. Watch logs for `kratos-config`, then `kratos-migrate`, then `kratos`, `hydra-migrate`, `hydra`, `login-ui`, `consent` coming up in order.

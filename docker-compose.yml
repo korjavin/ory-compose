@@ -12,28 +12,15 @@ version: "3.8"
 
 services:
   # -------------------------------------------------------------------------
-  # Renders config/kratos/kratos.yml.tmpl -> /etc/config/kratos/kratos.yml
-  # using runtime env vars. Runs once on every restart.
+  # Renders kratos.yml from the baked template + runtime env vars into the
+  # `kratos-rendered` shared volume. The image is built from ./config and has
+  # all config files + envsubst baked in — no runtime apk install, no
+  # bind-mount of host paths.
   # -------------------------------------------------------------------------
   kratos-config:
-    image: ${ENVSUBST_IMAGE:-alpine:3.20}
+    image: ${KRATOS_CONFIG_IMAGE:-ghcr.io/korjavin/ory-kratos-config:latest}
     container_name: ${KRATOS_CONFIG_CONTAINER_NAME:-ory-kratos-config}
     restart: "no"
-    command:
-      - /bin/sh
-      - -c
-      - |
-        set -e
-        apk add --no-cache gettext >/dev/null
-        envsubst < /src/kratos.yml.tmpl > /out/kratos.yml
-        cp /src/identity.schema.json /out/identity.schema.json
-        cp /src/oidc.google.jsonnet /out/oidc.google.jsonnet
-        cp /src/oidc.pocket-id.jsonnet /out/oidc.pocket-id.jsonnet
-        cp /src/oidc.github.jsonnet /out/oidc.github.jsonnet
-        cp /src/oidc.gitlab.jsonnet /out/oidc.gitlab.jsonnet
-        cp /src/oidc.microsoft.jsonnet /out/oidc.microsoft.jsonnet
-        echo "Rendered kratos config:"
-        ls -la /out
     environment:
       KRATOS_DSN: ${KRATOS_DSN:-sqlite:///var/lib/kratos/db.sqlite?_fk=true&mode=rwc}
       KRATOS_PUBLIC_HOST: ${KRATOS_PUBLIC_HOST}
@@ -66,7 +53,6 @@ services:
       MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
       MICROSOFT_TENANT: ${MICROSOFT_TENANT:-common}
     volumes:
-      - ./config/kratos:/src:ro
       - kratos-rendered:/out
     networks:
       - internal

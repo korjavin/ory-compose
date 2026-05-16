@@ -7,6 +7,7 @@ on:
     paths:
       - 'consent/**'
       - 'invite/**'
+      - 'config/**'
       - '.github/workflows/build-services.yml'
   workflow_dispatch:
 
@@ -24,6 +25,8 @@ jobs:
             image: ory-consent
           - context: invite
             image: ory-invite
+          - context: config
+            image: ory-kratos-config
 
     steps:
       - name: Checkout repository
