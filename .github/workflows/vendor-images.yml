@@ -9,7 +9,7 @@ jobs:
   vendor:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
 
     strategy:
@@ -17,10 +17,13 @@ jobs:
         include:
           - upstream: oryd/kratos:v1.3.1
             target: kratos-vendor
+            tag_var: KRATOS_VENDOR_TAG
           - upstream: oryd/hydra:v2.3.0
             target: hydra-vendor
+            tag_var: HYDRA_VENDOR_TAG
           - upstream: oryd/kratos-selfservice-ui-node:v1.3.1
             target: kratos-selfservice-ui-node-vendor
+            tag_var: LOGIN_UI_VENDOR_TAG
 
     steps:
       - name: Checkout repository
@@ -33,53 +36,63 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull and re-push image
+      - name: Pull, re-tag with upstream digest, push
         env:
           UPSTREAM_IMAGE: ${{ matrix.upstream }}
           GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.target }}
+          TAG_VAR: ${{ matrix.tag_var }}
         run: |
+          set -e
           docker pull "${UPSTREAM_IMAGE}"
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${UPSTREAM_IMAGE}" | cut -d@ -f2)
-          docker tag "${UPSTREAM_IMAGE}" "${GHCR_IMAGE}:latest"
-          docker push "${GHCR_IMAGE}:latest"
-          echo "Vendored ${UPSTREAM_IMAGE} → ${GHCR_IMAGE}:latest (digest: ${DIGEST})"
-          echo "${{ matrix.target }}@${DIGEST}" >> "${GITHUB_WORKSPACE}/vendor-digests-${{ matrix.target }}.log"
+          SHORT_TAG="d-$(echo "$DIGEST" | sed 's/sha256://' | cut -c1-12)"
 
-      - name: Upload digest artifact
+          docker tag "${UPSTREAM_IMAGE}" "${GHCR_IMAGE}:latest"
+          docker tag "${UPSTREAM_IMAGE}" "${GHCR_IMAGE}:${SHORT_TAG}"
+          docker push "${GHCR_IMAGE}:latest"
+          docker push "${GHCR_IMAGE}:${SHORT_TAG}"
+
+          echo "Vendored ${UPSTREAM_IMAGE} -> ${GHCR_IMAGE}:{latest,${SHORT_TAG}}"
+          mkdir -p tag-out
+          echo "${TAG_VAR}=${SHORT_TAG}" > "tag-out/${{ matrix.target }}.env"
+
+      - name: Upload tag artifact
         uses: actions/upload-artifact@v4
         with:
-          name: digest-${{ matrix.target }}
-          path: vendor-digests-${{ matrix.target }}.log
+          name: tag-${{ matrix.target }}
+          path: tag-out/${{ matrix.target }}.env
 
-  publish-digests:
+  redeploy:
     needs: vendor
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: deploy-branch
+      cancel-in-progress: false
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Download all digest artifacts
+      - name: Download all tag artifacts
         uses: actions/download-artifact@v4
         with:
-          path: digests
+          path: tags
           merge-multiple: true
 
-      - name: Append digests to deploy branch and push
+      - name: Rebuild deploy branch pinned to vendored digests
         run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "actions@github.com"
-          git checkout -B deploy
-          {
-            echo ""
-            echo "## Vendor run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            cat digests/*.log
-          } >> vendor-digests.log
-          git add vendor-digests.log
-          git commit -m "chore: vendor ory images $(date -u +%Y-%m-%d)" || echo "Nothing to commit"
-          git push origin deploy --force
+          set -e
+          for f in tags/*.env; do
+            echo "Loading $f"
+            # shellcheck disable=SC1090
+            source "$f"
+          done
+          export KRATOS_VENDOR_TAG HYDRA_VENDOR_TAG LOGIN_UI_VENDOR_TAG
+          bash .github/scripts/build-deploy-branch.sh
 
       - name: Check Portainer webhook secret
         id: webhook

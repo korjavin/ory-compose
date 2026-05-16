@@ -69,11 +69,42 @@ Admin APIs are reachable from other containers on the `ory_internal` Docker netw
 │   ├── main.go
 │   ├── go.mod
 │   └── Dockerfile                    # → ghcr.io/<owner>/ory-invite:latest
-└── .github/workflows/
-    ├── deploy.yml                    # push deploy branch → Portainer webhook
-    ├── vendor-images.yml             # weekly: pull oryd/* → push to GHCR
-    └── build-services.yml            # build & push consent + invite to GHCR
+└── .github/
+    ├── scripts/
+    │   └── build-deploy-branch.sh    # shared: rebuild deploy from master + tag pins
+    └── workflows/
+        ├── deploy.yml                # master push (non-image) → deploy branch
+        ├── vendor-images.yml         # weekly: pull oryd/* → push vendored to GHCR
+        └── build-services.yml        # build & push consent + invite + kratos-config
 ```
+
+## How deploys are pinned
+
+`master` always references images as `:latest` (e.g. `ghcr.io/korjavin/ory-consent:latest`). The `deploy` branch — what Portainer actually pulls — is auto-generated with each image pinned to a concrete tag.
+
+| Image | Pinned to |
+|---|---|
+| `ory-consent`, `ory-invite`, `ory-kratos-config` | the **master commit SHA** that last built it (built by `build-services.yml`) |
+| `kratos-vendor`, `hydra-vendor`, `kratos-selfservice-ui-node-vendor` | `d-<first-12-of-upstream-digest>` (built by `vendor-images.yml`) |
+
+Each deploy-branch commit also carries `image-tags.env`, recording the exact tags for that revision. To inspect what's currently deployed:
+
+```bash
+git show origin/deploy:image-tags.env
+```
+
+To roll back one image (e.g. revert ory-consent to its previous SHA):
+
+```bash
+# Find the SHA you want to roll back to
+git log --oneline master -- consent/
+# Force the deploy branch to that pinned tag
+ORY_CONSENT_TAG=<sha> bash .github/scripts/build-deploy-branch.sh
+```
+
+Or just `git revert` the offending master commit; the next `Deploy Ory Stack` run repins automatically.
+
+The pinning model means Portainer always sees a tag it hasn't pulled before → it pulls every redeploy → no more "Portainer cached `:latest`" surprises.
 
 ## How environment variables are wired
 

@@ -1,10 +1,28 @@
 name: Deploy Ory Stack
 
+# Handles every master push EXCEPT those that touched paths watched by
+# build-services.yml (consent/, invite/, config/) — those rebuild and
+# pin tags themselves. Everything else (compose tweaks, docs, etc.) flows
+# through here and just re-pins the deploy branch to master HEAD with the
+# tags already recorded in image-tags.env.
+
 on:
   push:
     branches:
       - master
+    paths-ignore:
+      - 'consent/**'
+      - 'invite/**'
+      - 'config/**'
+      - '.github/workflows/build-services.yml'
+      - '.github/workflows/vendor-images.yml'
+      - '.github/scripts/build-deploy-branch.sh'
+      - '**.md'
   workflow_dispatch:
+
+concurrency:
+  group: deploy-branch
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -15,13 +33,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create/Update deploy branch
-        run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "actions@github.com"
-          git checkout -B deploy
-          git push origin deploy --force
+      - name: Rebuild deploy branch
+        run: bash .github/scripts/build-deploy-branch.sh
 
       - name: Check Portainer webhook secret
         id: webhook

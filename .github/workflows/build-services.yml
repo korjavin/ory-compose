@@ -9,6 +9,7 @@ on:
       - 'invite/**'
       - 'config/**'
       - '.github/workflows/build-services.yml'
+      - '.github/scripts/build-deploy-branch.sh'
   workflow_dispatch:
 
 jobs:
@@ -58,17 +59,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: deploy-branch
+      cancel-in-progress: false
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Push deploy branch
-        run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "actions@github.com"
-          git checkout -B deploy
-          git push origin deploy --force
+      - name: Rebuild deploy branch pinned to this commit's SHA
+        env:
+          ORY_CONSENT_TAG: ${{ github.sha }}
+          ORY_INVITE_TAG: ${{ github.sha }}
+          ORY_KRATOS_CONFIG_TAG: ${{ github.sha }}
+        run: bash .github/scripts/build-deploy-branch.sh
 
       - name: Check Portainer webhook secret
         id: webhook
