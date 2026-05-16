@@ -2,9 +2,11 @@
 
 A git-ops Docker Compose deployment that gives you:
 
-- **Ory Kratos** — identity management (registration, login, profile, social sign-in via Google + Pocket-ID).
-- **Ory Hydra** — OAuth2 / OIDC provider you point your other apps at (Outline, Forgejo, etc.).
-- **kratos-selfservice-ui-node** — reference Login / Registration / Consent UI that bridges Kratos and Hydra.
+- **Ory Kratos** — identity management. Social sign-in via Google, GitHub, GitLab, Microsoft/Entra, Pocket-ID; passkeys (WebAuthn); password fallback.
+- **Ory Hydra** — OAuth2 / OIDC provider you point your other apps at (Outline, Forgejo, etc.). One Hydra client per app.
+- **kratos-selfservice-ui-node** — reference Login / Registration / Settings / Recovery UI.
+- **Custom consent service** (`consent/`) — replaces the Login UI's consent handler. Enforces per-client `required_groups` and copies `groups` into ID + access tokens, so each app's access is gated centrally.
+- **Invite CLI** (`invite/`) — pre-creates a Kratos identity with the right group memberships and prints a 1h recovery link. Send the link, recipient picks whichever auth method(s) they want and links them all to the same identity.
 
 Both Kratos and Hydra run on **SQLite** with data persisted in named Docker volumes — lightweight, no Postgres dependency.
 
@@ -54,10 +56,22 @@ Admin APIs are reachable from other containers on the `ory_internal` Docker netw
 │       ├── kratos.yml.tmpl          # rendered at startup with envsubst
 │       ├── identity.schema.json     # user shape (incl. groups[])
 │       ├── oidc.google.jsonnet      # Google → Kratos identity mapper
-│       └── oidc.pocket-id.jsonnet   # Pocket-ID → Kratos identity mapper
+│       ├── oidc.pocket-id.jsonnet
+│       ├── oidc.github.jsonnet
+│       ├── oidc.gitlab.jsonnet
+│       └── oidc.microsoft.jsonnet
+├── consent/                          # our Go consent service
+│   ├── main.go
+│   ├── go.mod
+│   └── Dockerfile                    # → ghcr.io/<owner>/ory-consent:latest
+├── invite/                           # our Go invite CLI
+│   ├── main.go
+│   ├── go.mod
+│   └── Dockerfile                    # → ghcr.io/<owner>/ory-invite:latest
 └── .github/workflows/
-    ├── deploy.yml                   # push deploy branch → Portainer webhook
-    └── vendor-images.yml            # weekly: pull oryd/* → push to GHCR
+    ├── deploy.yml                    # push deploy branch → Portainer webhook
+    ├── vendor-images.yml             # weekly: pull oryd/* → push to GHCR
+    └── build-services.yml            # build & push consent + invite to GHCR
 ```
 
 ## How environment variables are wired
@@ -94,27 +108,72 @@ Traefik handles certs via the `myresolver` (or whatever you set in `TRAEFIK_CERT
 
 ## Setting up the social providers
 
-### Google
-1. Create OAuth client at <https://console.cloud.google.com/apis/credentials>.
-2. Application type: **Web application**.
-3. Authorized redirect URI:
-   `https://${KRATOS_PUBLIC_HOST}/self-service/methods/oidc/callback/google`
-4. Copy the client ID + secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+The redirect URI in every provider's console is always:
 
-### Pocket-ID
-1. In your Pocket-ID admin UI, create an OIDC client.
-2. Redirect URI:
-   `https://${KRATOS_PUBLIC_HOST}/self-service/methods/oidc/callback/pocket-id`
-3. Set `POCKET_ID_ISSUER_URL=https://pocket-id.example.com/` (must serve `.well-known/openid-configuration`).
-4. Copy the client ID + secret into `POCKET_ID_CLIENT_ID` and `POCKET_ID_CLIENT_SECRET`.
+```
+https://${KRATOS_PUBLIC_HOST}/self-service/methods/oidc/callback/<provider-id>
+```
 
-If a provider's client_id/secret is left blank, Kratos still starts — but that provider's button won't function. To add a third social provider (GitHub, Microsoft, Apple, …), add a new entry under `selfservice.methods.oidc.config.providers` in `config/kratos/kratos.yml.tmpl` and ship a corresponding mapper jsonnet.
+`<provider-id>` is `google`, `pocket-id`, `github`, `gitlab`, or `microsoft`. If a provider's `*_CLIENT_ID`/`*_CLIENT_SECRET` is left blank, Kratos still starts — that provider's button just won't work, no harm done.
+
+| Provider | Console | Notes |
+|---|---|---|
+| **Google** | <https://console.cloud.google.com/apis/credentials> → OAuth client (Web) | Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`. |
+| **Pocket-ID** | Your Pocket-ID admin UI → create OIDC client | Set `POCKET_ID_ISSUER_URL` to your Pocket-ID base URL (must serve `.well-known/openid-configuration`), plus client id/secret. |
+| **GitHub** | <https://github.com/settings/developers> → New OAuth App | Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`. GitHub doesn't issue `email_verified`; we trust the email returned by `user:email` scope. |
+| **GitLab** | <https://gitlab.com/-/profile/applications> (or your self-hosted instance) | Set `GITLAB_ISSUER_URL`, `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET`. Scopes: `openid profile email`. |
+| **Microsoft / Entra** | <https://entra.microsoft.com/> → App registrations → New | Set `MICROSOFT_TENANT` (`common`, `organizations`, `consumers`, or a tenant UUID), `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`. |
+
+To add another provider (Apple, Discord, …), add an entry under `selfservice.methods.oidc.config.providers` in `config/kratos/kratos.yml.tmpl`, ship a matching mapper jsonnet, and add the env vars to the `kratos-config` init container in `docker-compose.yml`.
+
+### Passkeys (WebAuthn)
+
+Both passkey-passwordless and WebAuthn-2FA methods are enabled by default. `WEBAUTHN_RP_ID` must be a registrable suffix of every origin where you'll use passkeys — typically your cookie domain *without* the leading dot (e.g. `example.com` when `COOKIE_DOMAIN=.example.com`). Once a user logs in and clicks "Add passkey" in the settings UI, they can use it for subsequent logins on any subdomain under `WEBAUTHN_RP_ID`.
+
+## Invitations: pre-create identities + send a 1h link
+
+Public registration is left enabled (toggle with `KRATOS_PASSWORD_ENABLED=false` if you want to lock it down). Most of the time though, you'll invite colleagues explicitly — that lets you pin their group memberships *before* they ever log in.
+
+Use the `invite` CLI. It hits Kratos's admin API on the internal Docker network — run it on the host:
+
+```bash
+docker run --rm --network=ory_internal \
+  -e KRATOS_ADMIN_URL=http://kratos:4434 \
+  ghcr.io/korjavin/ory-invite:latest \
+  alice@example.com outline notan
+```
+
+What happens:
+
+1. The CLI creates a Kratos identity with `traits.email = alice@example.com` and `traits.groups = ["outline-users", "notan-users"]`.
+2. It generates a Kratos recovery link valid for `KRATOS_RECOVERY_LIFESPAN` (default 1h).
+3. It prints the link.
+
+You forward the link to Alice (Telegram, email, however). When she clicks it:
+
+1. Kratos validates the recovery token → creates a session.
+2. She lands on `/settings`, where she can pick any combination of: link Google / GitHub / GitLab / Microsoft / Pocket-ID, add a passkey, set a password.
+3. All of those credentials attach to the **same** identity, with `groups = ["outline-users", "notan-users"]` already set. Subsequent logins via any of those methods land on the same record.
+
+If she doesn't click within an hour, the link expires — re-run the `invite` command to mint a fresh one (the identity is still there, just dormant).
+
+Flags:
+
+```
+invite [flags] <email> <app1> [app2 ...]
+  --expires-in 1h         # how long the link is valid
+  --first "Alice"         # optional first name
+  --last "Doe"            # optional last name
+  --extra-groups admins   # additional groups beyond <app>-users
+```
 
 ## Registering your apps as Hydra OAuth2 clients
 
 There is no Hydra admin UI — you create clients via its admin API. Easiest way is to `docker exec` into the Hydra container and use the bundled CLI.
 
-Example: register Outline.
+Each app gets its own Hydra client with `metadata.required_groups` listing the Kratos groups whose members may use it. The custom consent service enforces this: anyone not in at least one of those groups is rejected at consent time, before they ever see the app.
+
+Example: Outline, gated on `outline-users`:
 
 ```bash
 docker exec -it ory-hydra hydra create client \
@@ -125,8 +184,10 @@ docker exec -it ory-hydra hydra create client \
   --scope openid,offline,profile,email,groups \
   --redirect-uri https://outline.example.com/auth/oidc.callback \
   --token-endpoint-auth-method client_secret_basic \
-  --skip-consent
+  --metadata '{"required_groups":["outline-users","admins"]}'
 ```
+
+> Don't pass `--skip-consent`. The consent service must run on every request so it can enforce `required_groups` and inject `groups` into the token.
 
 Hydra prints the generated `client_id` and `client_secret` — paste them into Outline's env vars.
 
@@ -146,37 +207,52 @@ OIDC_DISPLAY_NAME=Sign in
 OIDC_SCOPES=openid profile email
 ```
 
+### Changing required_groups later
+
+You can update a client's metadata without recreating it:
+
+```bash
+docker exec -it ory-hydra hydra update client <client-id> \
+  --endpoint http://localhost:4445 \
+  --metadata '{"required_groups":["outline-users","admins","editors"]}'
+```
+
+Changes take effect on the next consent (i.e. the next time a user logs in fresh). Users who already have a refresh token keep working until it expires; revoke their tokens via `hydra revoke token` if you need an immediate cutoff.
+
+## The consent service in one paragraph
+
+`consent/` is a ~250-line Go service that owns the `/consent` URL on `auth.example.com`. On every consent request it:
+
+1. Asks Hydra for the consent challenge details (`/admin/oauth2/auth/requests/consent`).
+2. Asks Kratos for the identity (`/admin/identities/<subject>`) — pulls `traits.groups`, `email`, `name`.
+3. Reads `client.metadata.required_groups`. If non-empty and the user is in none of them → reject. Otherwise → accept.
+4. On accept, copies `groups` into both `id_token.groups` and `access_token.groups`, plus standard email/name claims.
+
+Auto-accept (no consent screen) because every Hydra client is first-party (your apps). If you ever expose Hydra to third-party apps, add a confirmation page here.
+
 ## Managing users & groups
 
-Kratos has **no built-in admin UI**. You manage identities via the Admin API on `:4434` (internal-only). A few common ops:
+Kratos has **no built-in admin UI**. For day-to-day work use the `invite` CLI above. For other operations, talk to the admin API on `:4434` (internal-only) directly:
 
 ```bash
 # List identities
 docker exec -it ory-kratos kratos list identities --endpoint http://localhost:4434
 
-# Create an admin user
-docker exec -it ory-kratos kratos import identities --endpoint http://localhost:4434 - <<'JSON'
-{
-  "schema_id": "default",
-  "traits": {
-    "email": "you@example.com",
-    "name": { "first": "You", "last": "Admin" },
-    "groups": ["admin"]
-  }
-}
-JSON
-
-# Add a user to a group (PATCH the identity's traits)
-# Replace <id> with the identity's UUID from `list identities`.
+# Change someone's groups (replaces the list)
 docker exec -it ory-kratos kratos patch identity --endpoint http://localhost:4434 \
-  <id> -p '{"op":"replace","path":"/traits/groups","value":["admin","editors"]}'
+  <id> -p '[{"op":"replace","path":"/traits/groups","value":["admin","outline-users","forgejo-users"]}]'
+
+# Revoke all of someone's sessions immediately (e.g. after offboarding)
+docker exec -it ory-kratos kratos delete identity --endpoint http://localhost:4434 <id>
 ```
+
+The `groups` array is the only thing the consent service consults — change it and the next consent (after re-login or token refresh) reflects the new permissions. To force an immediate cutoff, also revoke their Hydra refresh tokens: `docker exec -it ory-hydra hydra revoke token --endpoint http://localhost:4445 <token>`.
 
 If you want a clickable UI later, drop in a community admin tool — e.g. <https://github.com/dfoxg/kratos-admin-ui> — pointed at the same internal Kratos admin URL. Keep it behind oauth2-proxy or your VPN; never expose the admin port publicly.
 
-### Surfacing groups in tokens
+### Group naming convention
 
-`groups` is part of every identity's traits. To make Hydra include them in access/ID tokens, add a `--token-claim` mapping when you create the OAuth2 client, or write a Hydra **consent** webhook that copies `kratos_session.identity.traits.groups` into the token's `session.access_token.groups`. The reference Login UI does the consent step — extend it (or fork it) when you need richer claims.
+The `invite` CLI assigns groups as `<app>-users` (e.g. `outline-users`, `notan-users`). Match that in each Hydra client's `metadata.required_groups`. You can also add cross-cutting groups (`admins`, `editors`) — `--extra-groups admins` on the invite CLI, then list `admins` in `required_groups` for any app admins should be able to use.
 
 ## Deploy in Portainer
 
@@ -184,10 +260,15 @@ If you want a clickable UI later, drop in a community admin tool — e.g. <https
    ```bash
    docker network create traefik_default
    ```
-2. **Create the stack in Portainer** → "Repository" mode, point at this repo, branch `deploy`.
-3. **Paste the env vars** from `.env.example` into Portainer's env panel (replace placeholder values).
-4. Hit **Deploy**. Watch logs for `kratos-config`, then `kratos-migrate`, then `kratos`, `hydra-migrate`, `hydra`, `login-ui` coming up in order.
-5. Set up the Portainer **redeploy webhook**, copy its URL into the GitHub repo as the secret `PORTAINER_REDEPLOY_HOOK`. From then on, every push to `master` triggers a redeploy via the `deploy` branch.
+2. **Before first deploy, run the image-building workflows once manually:**
+   - `Vendor Ory Images to GHCR` — mirrors `oryd/kratos`, `oryd/hydra`, `oryd/kratos-selfservice-ui-node` to your GHCR namespace.
+   - `Build Custom Services` — builds `ory-consent` and `ory-invite` from this repo into GHCR.
+
+   After both succeed, four images exist under `ghcr.io/<owner>/`: `kratos-vendor`, `hydra-vendor`, `kratos-selfservice-ui-node-vendor`, `ory-consent`. (`ory-invite` exists too but is only used via `docker run` on demand.)
+3. **Create the stack in Portainer** → "Repository" mode, point at this repo, branch `deploy`.
+4. **Paste the env vars** from `.env.example` into Portainer's env panel (replace placeholder values).
+5. Hit **Deploy**. Watch logs for `kratos-config`, then `kratos-migrate`, then `kratos`, `hydra-migrate`, `hydra`, `login-ui`, `consent` coming up in order.
+6. Set up the Portainer **redeploy webhook**, copy its URL into the GitHub repo as the secret `PORTAINER_REDEPLOY_HOOK`. From then on, every push to `master` triggers a redeploy via the `deploy` branch.
 
 ## Vendoring images
 

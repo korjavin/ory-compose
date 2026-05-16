@@ -29,6 +29,9 @@ services:
         cp /src/identity.schema.json /out/identity.schema.json
         cp /src/oidc.google.jsonnet /out/oidc.google.jsonnet
         cp /src/oidc.pocket-id.jsonnet /out/oidc.pocket-id.jsonnet
+        cp /src/oidc.github.jsonnet /out/oidc.github.jsonnet
+        cp /src/oidc.gitlab.jsonnet /out/oidc.gitlab.jsonnet
+        cp /src/oidc.microsoft.jsonnet /out/oidc.microsoft.jsonnet
         echo "Rendered kratos config:"
         ls -la /out
     environment:
@@ -39,16 +42,28 @@ services:
       COOKIE_DOMAIN: ${COOKIE_DOMAIN}
       KRATOS_LOG_LEVEL: ${KRATOS_LOG_LEVEL:-info}
       KRATOS_TOTP_ISSUER: ${KRATOS_TOTP_ISSUER:-Ory Kratos}
+      KRATOS_PASSWORD_ENABLED: ${KRATOS_PASSWORD_ENABLED:-true}
+      KRATOS_RECOVERY_LIFESPAN: ${KRATOS_RECOVERY_LIFESPAN:-1h}
       KRATOS_COOKIE_SECRET: ${KRATOS_COOKIE_SECRET}
       KRATOS_CIPHER_SECRET: ${KRATOS_CIPHER_SECRET}
       KRATOS_SMTP_CONNECTION_URI: ${KRATOS_SMTP_CONNECTION_URI:-smtps://test:test@mailslurper:1025/?skip_ssl_verify=true}
       KRATOS_SMTP_FROM_ADDRESS: ${KRATOS_SMTP_FROM_ADDRESS:-no-reply@example.com}
       KRATOS_SMTP_FROM_NAME: ${KRATOS_SMTP_FROM_NAME:-Ory Kratos}
+      WEBAUTHN_RP_DISPLAY_NAME: ${WEBAUTHN_RP_DISPLAY_NAME:-Ory}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       POCKET_ID_CLIENT_ID: ${POCKET_ID_CLIENT_ID:-}
       POCKET_ID_CLIENT_SECRET: ${POCKET_ID_CLIENT_SECRET:-}
       POCKET_ID_ISSUER_URL: ${POCKET_ID_ISSUER_URL:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITLAB_CLIENT_ID: ${GITLAB_CLIENT_ID:-}
+      GITLAB_CLIENT_SECRET: ${GITLAB_CLIENT_SECRET:-}
+      GITLAB_ISSUER_URL: ${GITLAB_ISSUER_URL:-https://gitlab.com}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      MICROSOFT_TENANT: ${MICROSOFT_TENANT:-common}
     volumes:
       - ./config/kratos:/src:ro
       - kratos-rendered:/out
@@ -127,6 +142,8 @@ services:
       URLS_SELF_PUBLIC: https://${HYDRA_PUBLIC_HOST}/
       URLS_CONSENT: https://${LOGIN_UI_HOST}/consent
       URLS_LOGIN: https://${LOGIN_UI_HOST}/login
+      # ^ /consent is served by the `consent` service below (path-routed by Traefik);
+      # all other paths on LOGIN_UI_HOST go to login-ui.
       URLS_LOGOUT: https://${LOGIN_UI_HOST}/logout
       URLS_ERROR: https://${LOGIN_UI_HOST}/error
       URLS_POST_LOGOUT_REDIRECT: https://${LOGIN_UI_HOST}/
@@ -191,7 +208,37 @@ services:
       - "traefik.http.routers.login-ui.rule=Host(`${LOGIN_UI_HOST}`)"
       - "traefik.http.routers.login-ui.entrypoints=websecure"
       - "traefik.http.routers.login-ui.tls.certresolver=${TRAEFIK_CERTRESOLVER:-myresolver}"
+      - "traefik.http.routers.login-ui.priority=10"
       - "traefik.http.services.login-ui.loadbalancer.server.port=3000"
+
+  # -------------------------------------------------------------------------
+  # Custom consent service. Replaces the upstream Login UI's consent handler
+  # so we can enforce client.metadata.required_groups and inject groups into
+  # tokens. Path-routed by Traefik: auth.example.com/consent -> here, all
+  # other paths -> login-ui.
+  # -------------------------------------------------------------------------
+  consent:
+    image: ${CONSENT_IMAGE:-ghcr.io/korjavin/ory-consent:latest}
+    container_name: ${CONSENT_CONTAINER_NAME:-ory-consent}
+    restart: unless-stopped
+    depends_on:
+      - hydra
+      - kratos
+    environment:
+      PORT: "3001"
+      HYDRA_ADMIN_URL: http://hydra:4445
+      KRATOS_ADMIN_URL: http://kratos:4434
+    networks:
+      - internal
+      - traefik_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK_NAME:-traefik_default}"
+      - "traefik.http.routers.consent.rule=Host(`${LOGIN_UI_HOST}`) && PathPrefix(`/consent`)"
+      - "traefik.http.routers.consent.entrypoints=websecure"
+      - "traefik.http.routers.consent.tls.certresolver=${TRAEFIK_CERTRESOLVER:-myresolver}"
+      - "traefik.http.routers.consent.priority=100"
+      - "traefik.http.services.consent.loadbalancer.server.port=3001"
 
 networks:
   internal:
