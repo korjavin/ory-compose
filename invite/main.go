@@ -81,6 +81,7 @@ func main() {
 		fmt.Fprintln(os.Stderr)
 		flag.PrintDefaults()
 	}
+	reorderArgsForFlags()
 	flag.Parse()
 
 	if flag.NArg() < 2 {
@@ -132,6 +133,18 @@ func main() {
 		log.Fatalf("recovery link (identity %s already created): %v", ident.ID, err)
 	}
 
+	// Kratos returns the recovery flow URL and the code separately. The
+	// Login UI's /recovery page auto-submits when ?code=... is appended,
+	// so we hand the user a single one-click URL.
+	oneClick := link.RecoveryLink
+	if link.RecoveryCode != "" {
+		sep := "?"
+		if strings.Contains(oneClick, "?") {
+			sep = "&"
+		}
+		oneClick = oneClick + sep + "code=" + link.RecoveryCode
+	}
+
 	fmt.Println()
 	fmt.Println("=== Invitation created ===")
 	fmt.Printf("Email:       %s\n", email)
@@ -139,9 +152,45 @@ func main() {
 	fmt.Printf("Identity ID: %s\n", ident.ID)
 	fmt.Printf("Expires:     %s (in %s)\n", link.ExpiresAt.Format(time.RFC3339), *expiresIn)
 	fmt.Println()
-	fmt.Println("Send this link to the user:")
-	fmt.Println(link.RecoveryLink)
+	fmt.Println("Send this link to the user (one-click, code is pre-filled):")
+	fmt.Println(oneClick)
+	if link.RecoveryCode != "" {
+		fmt.Println()
+		fmt.Printf("Fallback if the page asks for a code manually: %s\n", link.RecoveryCode)
+	}
 	fmt.Println()
+}
+
+// reorderArgsForFlags moves any -flag/--flag (and its value) to the front of
+// os.Args before flag.Parse runs. Go's stdlib `flag` stops parsing flags
+// once it sees the first non-flag arg, which surprises users who write
+// `invite <email> <app> --extra-groups admins`. Every flag in this CLI takes
+// exactly one value, so the rule is unambiguous.
+func reorderArgsForFlags() {
+	known := map[string]struct{}{
+		"-kratos-admin": {}, "--kratos-admin": {},
+		"-expires-in": {}, "--expires-in": {},
+		"-first": {}, "--first": {},
+		"-last": {}, "--last": {},
+		"-extra-groups": {}, "--extra-groups": {},
+	}
+	var flags, rest []string
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if _, ok := known[a]; ok && i+1 < len(args) {
+			flags = append(flags, a, args[i+1])
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			// --flag=value form or short flags / unknown — leave intact
+			flags = append(flags, a)
+			continue
+		}
+		rest = append(rest, a)
+	}
+	os.Args = append([]string{os.Args[0]}, append(flags, rest...)...)
 }
 
 func createIdentity(ctx context.Context, c *http.Client, admin string, in createIdentityReq) (*identityResp, error) {
