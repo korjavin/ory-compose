@@ -5,6 +5,14 @@ dsn: ${KRATOS_DSN}
 serve:
   public:
     base_url: https://${KRATOS_PUBLIC_HOST}/
+    # Share CSRF cookies across the auth subdomains. Without this, Kratos
+    # uses `__Host-` prefixed cookies which are pinned to the exact origin
+    # (kratos.example.com) and the Login UI at a sibling subdomain can't
+    # see them → every flow fetch fails CSRF → infinite re-init loop.
+    cookies:
+      domain: ${COOKIE_DOMAIN}
+      path: /
+      same_site: Lax
     cors:
       enabled: true
       allowed_origins:
