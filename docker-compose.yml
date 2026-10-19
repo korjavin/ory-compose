@@ -18,7 +18,7 @@ services:
   # bind-mount of host paths.
   # -------------------------------------------------------------------------
   kratos-config:
-    image: ${KRATOS_CONFIG_IMAGE:-ghcr.io/korjavin/ory-kratos-config:latest}
+    image: ${KRATOS_CONFIG_IMAGE:-ghcr.io/korjavin/ory-kratos-config:1ba9b6cd953c7f922a7bd60987bbfc84f1fa943c}
     container_name: ${KRATOS_CONFIG_CONTAINER_NAME:-ory-kratos-config}
     restart: "no"
     environment:
@@ -58,7 +58,7 @@ services:
   # One-shot migrator. Brings the SQLite schema up to date, then exits 0.
   # -------------------------------------------------------------------------
   kratos-migrate:
-    image: ${KRATOS_IMAGE:-ghcr.io/korjavin/kratos-vendor:latest}
+    image: ${KRATOS_IMAGE:-ghcr.io/korjavin/kratos-vendor:d-fe2428f103a6}
     container_name: ${KRATOS_MIGRATE_CONTAINER_NAME:-ory-kratos-migrate}
     restart: "no"
     depends_on:
@@ -74,7 +74,7 @@ services:
       - internal
 
   kratos:
-    image: ${KRATOS_IMAGE:-ghcr.io/korjavin/kratos-vendor:latest}
+    image: ${KRATOS_IMAGE:-ghcr.io/korjavin/kratos-vendor:d-fe2428f103a6}
     container_name: ${KRATOS_CONTAINER_NAME:-ory-kratos}
     restart: unless-stopped
     depends_on:
@@ -107,7 +107,7 @@ services:
   # Hydra (OAuth2 / OIDC provider). Configured 100% via env vars.
   # -------------------------------------------------------------------------
   hydra-migrate:
-    image: ${HYDRA_IMAGE:-ghcr.io/korjavin/hydra-vendor:latest}
+    image: ${HYDRA_IMAGE:-ghcr.io/korjavin/hydra-vendor:d-b94007e19a1f}
     container_name: ${HYDRA_MIGRATE_CONTAINER_NAME:-ory-hydra-migrate}
     restart: "no"
     environment:
@@ -119,7 +119,7 @@ services:
       - internal
 
   hydra:
-    image: ${HYDRA_IMAGE:-ghcr.io/korjavin/hydra-vendor:latest}
+    image: ${HYDRA_IMAGE:-ghcr.io/korjavin/hydra-vendor:d-b94007e19a1f}
     container_name: ${HYDRA_CONTAINER_NAME:-ory-hydra}
     restart: unless-stopped
     depends_on:
@@ -170,7 +170,7 @@ services:
   # https://github.com/ory/kratos-selfservice-ui-node
   # -------------------------------------------------------------------------
   login-ui:
-    image: ${LOGIN_UI_IMAGE:-ghcr.io/korjavin/kratos-selfservice-ui-node-vendor:latest}
+    image: ${LOGIN_UI_IMAGE:-ghcr.io/korjavin/kratos-selfservice-ui-node-vendor:d-2d6f9a84456c}
     container_name: ${LOGIN_UI_CONTAINER_NAME:-ory-login-ui}
     restart: unless-stopped
     depends_on:
@@ -207,7 +207,7 @@ services:
   # other paths -> login-ui.
   # -------------------------------------------------------------------------
   consent:
-    image: ${CONSENT_IMAGE:-ghcr.io/korjavin/ory-consent:latest}
+    image: ${CONSENT_IMAGE:-ghcr.io/korjavin/ory-consent:1ba9b6cd953c7f922a7bd60987bbfc84f1fa943c}
     container_name: ${CONSENT_CONTAINER_NAME:-ory-consent}
     restart: unless-stopped
     depends_on:
